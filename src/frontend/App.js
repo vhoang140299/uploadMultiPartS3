@@ -1,5 +1,4 @@
 import "./App.css"
-import { Uploader } from "./utils/upload"
 import { useEffect, useState } from "react"
 import axios from "axios"
 function App() {
@@ -7,20 +6,22 @@ function App() {
   const [uploader, setUploader] = useState(undefined)
   const [fileId, setFileId] = useState(undefined)
   const [fileKey, setFileKey] = useState(undefined)
-  const fileSizeChuck = 1024 * 1024 * 5
+  const fileSizeChuck = 1024 * 1024 * 6
   const [s3Urls, setUrls] = useState([])
   const [slicesFile, setSlicesFile] = useState([])
+  const [etags, setEtags] = useState([])
   let config = {
     headers: {
       "Access-Control-Allow-Origin": "*",
       "Access-Control-Allow-Headers": "*",
+      "Access-Control-Expose-Headers": "ETag",
     },
   }
 
   const getInitMultipart = (file) => {
     axios
       .post(
-        " http://localhost:3001/uploads/initializeMultipartUpload",
+        "http://localhost:3001/uploads/initializeMultipartUpload",
         {
           name: file.name,
         },
@@ -28,7 +29,6 @@ function App() {
       )
       .then((res) => {
         if (res) {
-          console.log(11111111, res)
           setFileId(res.data.fileId)
           setFileKey(res.data.fileKey)
           const parts = Math.ceil(file.size / fileSizeChuck)
@@ -39,7 +39,7 @@ function App() {
           }
           console.log(body)
           axios
-            .post(" http://localhost:3001/uploads/getMultipartPreSignedUrls", body, config)
+            .post("http://localhost:3001/uploads/getMultipartPreSignedUrls", body, config)
             .then((res) => {
               if (res.data.parts && res.data.parts.length > 0) {
                 setUrls(res.data.parts)
@@ -65,25 +65,65 @@ function App() {
     }
   }
 
-  const onUpload = () => {
+  const onUpload = async () => {
     const chunkFiles = []
-    console.log(s3Urls[s3Urls.length - 1].PartNumber)
+    let tags = []
+
     if (s3Urls.length > 0) {
-      const sentSize = (s3Urls[0].PartNumber - 1) * fileSizeChuck
-      console.log(sentSize) /// sai
-      while (sentSize < s3Urls[s3Urls.length - 1].PartNumber) {
-        const chuckFile = file.slice(sentSize, sentSize + fileSizeChuck)
-        chunkFiles.push(chuckFile)
-        console.log(sentSize)
+      await Promise.all(
+        s3Urls.map(async (s3Url) => {
+          const sentSize = (s3Url.PartNumber - 1) * fileSizeChuck
+          const chuckFile = file.slice(sentSize, sentSize + fileSizeChuck)
+          console.log(chuckFile)
+          console.log(chuckFile.size)
+          console.log(sentSize, sentSize + fileSizeChuck)
+          try {
+            const res = await axios.put(
+              s3Url.signedUrl,
+              {
+                file: chuckFile,
+              },
+              config,
+            )
+            console.log(res.headers)
+
+            if (res && res?.headers?.etag) {
+              const uploadedPart = {
+                PartNumber: s3Url.PartNumber,
+                ETag: res.headers.etag.replaceAll('"', ""),
+              }
+              tags.push(uploadedPart)
+            }
+            chunkFiles.push(chuckFile)
+          } catch (error) {
+            throw error
+          }
+          return 0
+        }),
+      )
+
+      if (tags.length > 0) {
+        axios
+          .post(
+            "http://localhost:3001/uploads/finalizeMultipartUpload",
+            { fileId: fileId, fileKey: fileKey, parts: tags },
+            config,
+          )
+          .then((res) => {
+            console.log(res)
+          })
+          .catch((err) => {
+            console.log(err)
+          })
       }
+
+      console.log(tags)
     }
-    console.log(s3Urls.length)
   }
   return (
     <div className="App">
       <h1>Upload your file</h1>
       <div>
-        -----
         <input type="file" onChange={onchangeFile} />
       </div>
       <div>

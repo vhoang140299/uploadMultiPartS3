@@ -2,7 +2,7 @@ import axios from "axios"
 
 // initializing axios
 const api = axios.create({
-  baseURL: "http://localhost:3000",
+  baseURL: "http://localhost:3001",
 })
 
 // original source: https://github.com/pilovm/multithreaded-uploader/blob/master/frontend/uploader.js
@@ -217,14 +217,12 @@ export class Uploader {
         xhr.addEventListener("abort", progressListener)
         xhr.addEventListener("loadend", progressListener)
         xhr.open("PUT", part.signedUrl)
-        console.log(part.signedUrl);
+        console.log(part.signedUrl)
 
         xhr.setRequestHeader("Access-Control-Expose-Headers", "*")
         xhr.setRequestHeader("access-control-allow-methods", "*")
         xhr.setRequestHeader("access-control-allow-origin", "*")
         xhr.onreadystatechange = () => {
-          console.log(11111111111)
-
           if (xhr.readyState === 4 && xhr.status === 200) {
             const ETag = xhr.getResponseHeader("Etag")
             console.log(xhr)
