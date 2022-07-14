@@ -5,11 +5,12 @@ function App() {
   const [file, setFile] = useState(undefined)
   const [uploader, setUploader] = useState(undefined)
   const [fileId, setFileId] = useState(undefined)
-  const [fileKey, setFileKey] = useState(undefined)
-  const fileSizeChuck = 1024 * 1024 * 6
+  const [fileName, setFileName] = useState(undefined)
+  const fileSizeChuck = 1024 * 1024 * 10
   const [s3Urls, setUrls] = useState([])
   const [slicesFile, setSlicesFile] = useState([])
   const [etags, setEtags] = useState([])
+  const [blobFiles, setBlobFile] = useState([])
   let config = {
     headers: {
       "Access-Control-Allow-Origin": "*",
@@ -18,45 +19,16 @@ function App() {
     },
   }
 
-  const getInitMultipart = (file) => {
-    axios
-      .post(
-        "http://localhost:3001/uploads/initializeMultipartUpload",
-        {
-          name: file.name,
-        },
-        config,
-      )
-      .then((res) => {
-        if (res) {
-          setFileId(res.data.fileId)
-          setFileKey(res.data.fileKey)
-          const parts = Math.ceil(file.size / fileSizeChuck)
-          const body = {
-            fileKey: res.data.fileKey,
-            fileId: res.data.fileId,
-            parts: parts,
-          }
-          console.log(body)
-          axios
-            .post("http://localhost:3001/uploads/getMultipartPreSignedUrls", body, config)
-            .then((res) => {
-              if (res.data.parts && res.data.parts.length > 0) {
-                setUrls(res.data.parts)
-              }
-            })
-            .catch((err) => console.log(err))
-        }
-      })
-      .catch((err) => {
-        console.log(err)
-      })
-  }
-
   const onchangeFile = (e) => {
     const fileChanged = e.target?.files?.[0]
     setFile(fileChanged)
-    getInitMultipart(fileChanged)
+    console.log(fileChanged)
+    axios.post("http://localhost:3001/uploads/start-upload", { name: fileChanged.name }, config).then((res) => {
+      console.log(res)
+
+      setFileId(res.data.UploadId)
+      setFileName(res.data.Key)
+    })
   }
   const onCancel = () => {
     if (uploader) {
@@ -67,59 +39,57 @@ function App() {
 
   const onUpload = async () => {
     const chunkFiles = []
+    const chunkCount = Math.floor(file.size / fileSizeChuck) + 1
+    console.log(chunkCount)
     let tags = []
-
-    if (s3Urls.length > 0) {
-      await Promise.all(
-        s3Urls.map(async (s3Url) => {
-          const sentSize = (s3Url.PartNumber - 1) * fileSizeChuck
-          const chuckFile = file.slice(sentSize, sentSize + fileSizeChuck)
-          console.log(chuckFile)
-          console.log(chuckFile.size)
-          console.log(sentSize, sentSize + fileSizeChuck)
-          try {
-            const res = await axios.put(
-              s3Url.signedUrl,
-              {
-                file: chuckFile,
-              },
+    let files = []
+    for (let uploadCount = 1; uploadCount < chunkCount + 1; uploadCount++) {
+      let start = (uploadCount - 1) * fileSizeChuck
+      let end = uploadCount * fileSizeChuck
+      let fileBlob = uploadCount < chunkCount ? file.slice(start, end) : file.slice(start)
+      files.push(fileBlob)
+      setBlobFile(files)
+    }
+    try {
+      if (files.length > 0) {
+        await Promise.all(
+          files.map(async (file, index) => {
+            console.log(file, index)
+            const signedUrl = await axios.post(
+              "http://localhost:3001/uploads/get-upload-url",
+              { partNumber: index + 1, uploadId: fileId, name: fileName },
               config,
             )
-            console.log(res.headers)
-
-            if (res && res?.headers?.etag) {
-              const uploadedPart = {
-                PartNumber: s3Url.PartNumber,
-                ETag: res.headers.etag.replaceAll('"', ""),
-              }
-              tags.push(uploadedPart)
+            // console.log("signedUrl", signedUrl)
+            let uploadChuck = await fetch(signedUrl.data, {
+              method: "PUT",
+              body: file,
+            })
+            // console.log(uploadChuck)
+            let EtagHeader = uploadChuck.headers.get("ETag")
+            console.log(EtagHeader)
+            let uploadPartDetails = {
+              ETag: EtagHeader,
+              PartNumber: index + 1,
             }
-            chunkFiles.push(chuckFile)
-          } catch (error) {
-            throw error
-          }
-          return 0
-        }),
-      )
-
-      if (tags.length > 0) {
-        axios
-          .post(
-            "http://localhost:3001/uploads/finalizeMultipartUpload",
-            { fileId: fileId, fileKey: fileKey, parts: tags },
-            config,
-          )
-          .then((res) => {
-            console.log(res)
-          })
-          .catch((err) => {
-            console.log(err)
-          })
+            console.log(uploadPartDetails)
+            tags.push(uploadPartDetails)
+          }),
+        )
       }
+    } catch (error) {}
 
-      console.log(tags)
+    console.log(tags)
+    if (tags.length > 0) {
+      const completeUpload = await axios.post(`http://localhost:3001/complete`, {
+        name: fileName,
+        parts: tags,
+        uploadId: fileId,
+      })
+      console.log(completeUpload)
     }
   }
+
   return (
     <div className="App">
       <h1>Upload your file</h1>
